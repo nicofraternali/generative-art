@@ -117,10 +117,40 @@ The PNG has metadata embedded as text chunks. The JSON sidecar contains:
 uv run python -c "from genart.io import read_artwork_metadata; import json; print(json.dumps(read_artwork_metadata('path/to/piece.png'), indent=2))"
 ```
 
-## Stage 3 — Migrate first sketch (planned)
+## Stage 3 — First sketch migrated (May 2026)
 
-Refactor `tiling_squares` to use the shared package. Establishes the template
-for migrating the others.
+### What was added
+
+- `projects/tiling_squares/sketch.py` — the original tiling sketch refactored
+  to use the shared package. Imports themes from `genart.palettes`, seeds
+  RNG via `genart.seeds.init_seed`, and saves via `genart.io.save_artwork`.
+- Command-line interface: `--seed`, `--theme`, `--L`.
+- Per-project README at `projects/tiling_squares/README.md`.
+
+### How to run a sketch
+
+Interactive session:
+
+```powershell
+uv run python projects//sketch.py
+```
+
+View a specific piece (interactive — window stays open):
+
+```powershell
+uv run python projects//sketch.py --seed  --theme 
+```
+
+Reproduce and save without interaction (batch mode):
+
+```powershell
+uv run python projects//sketch.py --seed  --theme  --save-and-exit
+```
+
+### Where outputs go
+
+All saves land in `projects/<project>/output/`, which is gitignored.
+Pieces only enter version control when explicitly curated (stage 5).
 
 ## Stage 4 — Migrate remaining sketches (planned)
 
