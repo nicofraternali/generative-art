@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[oc]
+*.egg-info/
+build/
+dist/
+wheels/
+
+# Virtual environments
+.venv/
+.python-version
+
+# uv cache (per-machine)
+.uv-cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Project-specific: scratch renders are NOT committed
+projects/*/output/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs and temp files
+*.log
+*.tmp
