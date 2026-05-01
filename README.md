@@ -4,6 +4,8 @@ A monorepo for generative art experiments by [Nico Fraternali](https://github.co
 Each project is a self-contained py5 sketch; shared utilities live in the `genart` package.
 
 ## Repository structure
+
+```
 generative-art/
 ├── pyproject.toml          # uv-managed dependencies
 ├── uv.lock                 # pinned exact versions, committed
@@ -13,6 +15,7 @@ generative-art/
 ├── curated/                # hand-picked outputs + metadata sidecars (committed)
 ├── notebooks/              # exploration notebooks (outputs stripped on commit)
 └── scripts/                # tooling: curation, gallery generation
+```
 
 ## Reproducibility contract
 
