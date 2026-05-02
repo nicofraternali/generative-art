@@ -172,11 +172,16 @@ substrate lives in `genart.tiling`; rendering stays per-sketch. This
 keeps `genart.tiling` py5-free and lets each sketch express its style
 without negotiating a common rendering interface.
 
-### Pending in Stage 4
+### Pending in Stage 4 — completed (May 2026)
 
-- Pendulum migration: deserves its own commit. Will add proper RNG
-  seeding (currently only labels with seed_id, doesn't seed RNG),
-  CLI surface, and optionally the `scipy.ndimage.label` optimization.
+- `projects/pendulum/sketch.py` — migrated, with proper RNG seeding,
+  scipy-based topology solver, vectorized adjacency detection, and
+  quality metrics in the metadata.
+- Saves produce two files per piece: `_trace` (raw simulation) and
+  `_art` (painted topology), each with its own sidecar.
+- New CLI flag `--max-points` for varying trace duration.
+
+Stage 4 complete. Next: Stage 5 — curation and blog bridge.
 
 ## Stage 5 — Blog bridge (planned)
 
