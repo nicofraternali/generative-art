@@ -152,10 +152,31 @@ uv run python projects//sketch.py --seed  --theme  --save-and-exit
 All saves land in `projects/<project>/output/`, which is gitignored.
 Pieces only enter version control when explicitly curated (stage 5).
 
-## Stage 4 — Migrate remaining sketches (planned)
+---
 
-`tiling_holes` and `pendulum`. The pendulum gets the actual RNG seeding fix
-and optionally the `scipy.ndimage.label` optimization.
+## Stage 4 (partial) — tilings unified (May 2026)
+
+### What was added
+
+- `src/genart/tiling.py` — shared primitives for Truchet-style tilings:
+  `generate_grid(L)`, `find_diamonds(grid)`, `GridGeometry` dataclass.
+- `projects/tiling_squares/sketch.py` — refactored to use the shared module.
+- `projects/tiling_holes/sketch.py` — new sketch using the shared module
+  with V-cut trench rendering.
+
+### Architectural note
+
+Both tiling sketches share their combinatorial substrate (the 0/1 grid
+and the 1001 diamond detection) but differ in rendering. The shared
+substrate lives in `genart.tiling`; rendering stays per-sketch. This
+keeps `genart.tiling` py5-free and lets each sketch express its style
+without negotiating a common rendering interface.
+
+### Pending in Stage 4
+
+- Pendulum migration: deserves its own commit. Will add proper RNG
+  seeding (currently only labels with seed_id, doesn't seed RNG),
+  CLI surface, and optionally the `scipy.ndimage.label` optimization.
 
 ## Stage 5 — Blog bridge (planned)
 
