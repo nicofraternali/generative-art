@@ -279,6 +279,93 @@ def draw_pendulum_overlay() -> None:
 # Topology — region discovery, adjacency, coloring.
 # ---------------------------------------------------------------------------
 
+def recolor_regions() -> None:
+    """
+    Re-run greedy graph coloring on the existing region map with the
+    current theme's palette. Repaints pg_art from scratch.
+
+    Cheaper than a full reset because the physics simulation and flood-fill
+    are skipped — only the coloring and painting passes re-run.
+    """
+    global region_colors
+
+    # Rebuild adjacency from scratch. We don't store it across composition
+    # state, so we have to recompute. Cheap relative to the full topology
+    # solve since the regions list is already in memory.
+    pg_analysis.load_pixels()
+    raw_pixels = np.array(pg_analysis.pixels, dtype=np.int32)
+    w, h = pg_analysis.width, pg_analysis.height
+    bg_int = py5.color(colors["bg"])
+    is_empty = (raw_pixels == bg_int).reshape((h, w)).astype(np.uint8)
+    structure = np.ones((3, 3), dtype=np.uint8)
+    labeled, _ = ndi_label(is_empty, structure=structure)
+
+    # Map our regions list back to label IDs by checking each region's
+    # first pixel against the labeled array.
+    region_ids: list[int] = []
+    for pixel_list in regions:
+        if not pixel_list:
+            region_ids.append(0)
+            continue
+        x, y = pixel_list[0]
+        region_ids.append(int(labeled[y, x]))
+
+    # Compute adjacency among the labels we care about.
+    valid = set(region_ids)
+    valid.discard(0)
+    adjacency: dict[int, set[int]] = {i: set() for i in valid}
+    for shift_axis, shift_amount in [(0, 1), (0, -1), (1, 1), (1, -1)]:
+        rolled = np.roll(labeled, shift=shift_amount, axis=shift_axis)
+        mask = (labeled > 0) & (rolled > 0) & (labeled != rolled)
+        if not mask.any():
+            continue
+        pairs = np.stack([labeled[mask], rolled[mask]], axis=1)
+        unique_pairs = np.unique(pairs, axis=0)
+        for a, b in unique_pairs.tolist():
+            if a in valid and b in valid:
+                adjacency[a].add(b)
+                adjacency[b].add(a)
+
+    # Greedy coloring with the new palette.
+    palette_pool = [c for c in colors["palette"] if c != colors["bg"]]
+    sorted_indices = sorted(range(len(regions)), key=lambda i: len(regions[i]), reverse=True)
+    assigned: dict[int, str] = {}
+    new_colors: list[str] = [""] * len(regions)
+    for idx in sorted_indices:
+        r_id = region_ids[idx]
+        if r_id == 0:
+            new_colors[idx] = random.choice(palette_pool)
+            continue
+        used = {assigned[n] for n in adjacency[r_id] if n in assigned}
+        candidates = [c for c in palette_pool if c not in used]
+        chosen = random.choice(candidates if candidates else palette_pool)
+        assigned[r_id] = chosen
+        new_colors[idx] = chosen
+    region_colors[:] = new_colors
+
+    # Repaint pg_art from scratch in a single batched pass.
+    pg_art.begin_draw()
+    pg_art.background(colors["bg"])
+    pg_art.end_draw()
+
+    paint_regions_batch(regions, region_colors)
+    finish_painting()
+
+    # Also repaint pg_physics: same trajectory, but redraw it with the new
+    # theme's background and trace colors.
+    pg_physics.begin_draw()
+    pg_physics.background(colors["bg"])
+    pg_physics.stroke(py5.color(colors["trace"]))
+    pg_physics.stroke_weight(1.25 * RES_SCALE)
+    pg_physics.stroke_cap(py5.ROUND)
+    pg_physics.stroke_join(py5.ROUND)
+    pg_physics.no_fill()
+    pg_physics.begin_shape()
+    for x, y in path_points:
+        pg_physics.vertex(x, y)
+    pg_physics.end_shape()
+    pg_physics.end_draw()
+
 def solve_topology() -> None:
     """
     Discover regions, compute adjacency, assign colors.
@@ -379,19 +466,67 @@ def solve_topology() -> None:
         }
 
 
-def paint_region_step(pixel_list: list[tuple[int, int]], color_hex: str) -> None:
-    """Paint one region using per-pixel circles (the 'pointy pencil' technique)."""
+def _hex_to_argb(color_hex: str) -> tuple[int, int, int, int]:
+    """
+    Convert '#RRGGBB' to a (A, R, G, B) tuple of uint8 values for use
+    with py5's np_pixels[] buffer.
+
+    py5.np_pixels is a 3D array shaped (height, width, 4) with channels
+    ordered A, R, G, B and values in 0..255. No signed/unsigned weirdness.
+    """
+    h = color_hex.lstrip("#")
+    r = int(h[0:2], 16)
+    g = int(h[2:4], 16)
+    b = int(h[4:6], 16)
+    return (255, r, g, b)
+
+
+def paint_regions_batch(
+    pixel_lists: list[list[tuple[int, int]]],
+    color_hexes: list[str],
+) -> None:
+    """
+    Paint all regions at once via direct numpy pixel manipulation.
+
+    Uses py5's np_pixels[] interface: a (H, W, 4) uint8 array with ARGB
+    channel order. Much faster than per-pixel circle calls because all
+    assignment happens in numpy with a single load/update pair.
+
+    Wraps the pixel operations in begin_draw/end_draw to ensure proper
+    state transitions when this is followed by vector drawing on the
+    same buffer (e.g., finish_painting overlaying the trace line).
+    """
     pg_art.begin_draw()
-    pg_art.no_stroke()
-    pg_art.fill(color_hex)
-    for x, y in pixel_list:
-        pg_art.circle(x, y, 3.5)
+    pg_art.load_np_pixels()
+    np_pixels = pg_art.np_pixels  # shape (H, W, 4), uint8, ARGB
+
+    for pixel_list, color_hex in zip(pixel_lists, color_hexes):
+        if not pixel_list:
+            continue
+        argb = _hex_to_argb(color_hex)
+        coords = np.array(pixel_list, dtype=np.int64)
+        xs = coords[:, 0]
+        ys = coords[:, 1]
+        # np_pixels is indexed [y, x, channel]; broadcast the 4-tuple across rows.
+        np_pixels[ys, xs] = argb
+
+    pg_art.update_np_pixels()
     pg_art.end_draw()
 
 
+def paint_region_step(pixel_list: list[tuple[int, int]], color_hex: str) -> None:
+    """Single-region wrapper for the streaming PAINTING state in draw()."""
+    paint_regions_batch([pixel_list], [color_hex])
+
+
 def finish_painting() -> None:
-    """Overlay the crisp continuous trace on top of the painted regions."""
+    """
+    Overlay the crisp continuous trace and burn the physics metadata
+    into pg_art so the saved PNG carries the values that produced it.
+    """
     pg_art.begin_draw()
+
+    # Trace overlay.
     pg_art.no_fill()
     pg_art.stroke(colors["trace"])
     pg_art.stroke_weight(1.25 * RES_SCALE)
@@ -401,7 +536,66 @@ def finish_painting() -> None:
     for x, y in path_points:
         pg_art.vertex(x, y)
     pg_art.end_shape()
+
+    _draw_metadata_into_buffer(pg_art)
     pg_art.end_draw()
+
+
+def _draw_metadata_into_buffer(buf) -> None:
+    """
+    Draw the physics metadata (m, r, a for both bobs) into a high-res
+    buffer at the bottom-center, matching the layout used by the
+    on-screen draw_metadata_columns(). All sizes scale with RES_SCALE
+    so the burned text matches the apparent size of the live overlay.
+    """
+    # Match the on-screen font; scale up for the high-res buffer.
+    font_size = int(11 * RES_SCALE)
+    font_italic = py5.create_font("Consolas Italic", font_size)
+    buf.text_font(font_italic)
+    buf.fill(colors["text"])
+    buf.text_align(py5.LEFT, py5.BOTTOM)
+
+    dr1 = r1 / RES_SCALE
+    dr2 = r2 / RES_SCALE
+
+    labels1 = ["m\u2081=", "r\u2081=", "α\u2081="]
+    vals1 = [f"{m1:.2f}", f"{dr1:.2f}", f"{initial_a1:.2f}"]
+    labels2 = ["m\u2082=", "r\u2082=", "α\u2082="]
+    vals2 = [f"{m2:.2f}", f"{dr2:.2f}", f"{initial_a2:.2f}"]
+
+    max_label_w = []
+    max_val_w = []
+    for i in range(3):
+        lw = max(buf.text_width(labels1[i]), buf.text_width(labels2[i]))
+        vw = max(buf.text_width(vals1[i]), buf.text_width(vals2[i]))
+        max_label_w.append(lw)
+        max_val_w.append(vw)
+
+    # Spacing scaled to match the on-screen version proportionally.
+    inner_gap = 6 * RES_SCALE
+    col_gap = 18 * RES_SCALE
+    col_widths = [max_label_w[i] + inner_gap + max_val_w[i] for i in range(3)]
+
+    # Center horizontally on the art buffer (buf is the full pg_art width).
+    center_x = buf.width / 2
+    base_x = center_x - (sum(col_widths) + col_gap * 2) / 2
+
+    # Bottom rows, scaled from the on-screen offsets (22 and 36 pixels).
+    y2 = buf.height - 22 * RES_SCALE
+    y1 = buf.height - 36 * RES_SCALE
+
+    x = base_x
+    for i in range(3):
+        label_x = x
+        # Bottom row (subscript 2).
+        lbl_x2 = label_x + (max_label_w[i] - buf.text_width(labels2[i]))
+        buf.text(labels2[i], lbl_x2, y2)
+        buf.text(vals2[i], label_x + max_label_w[i] + inner_gap, y2)
+        # Top row (subscript 1).
+        lbl_x1 = label_x + (max_label_w[i] - buf.text_width(labels1[i]))
+        buf.text(labels1[i], lbl_x1, y1)
+        buf.text(vals1[i], label_x + max_label_w[i] + inner_gap, y1)
+        x += col_widths[i] + col_gap
 
 
 # ---------------------------------------------------------------------------
@@ -448,11 +642,6 @@ def draw_metadata_columns() -> None:
         py5.text(labels1[i], lbl_x1, y1)
         py5.text(vals1[i], label_x + max_label_w[i] + inner_gap, y1)
         x += col_widths[i] + col_gap
-
-    py5.text_font(f_bold)
-    py5.text_align(py5.RIGHT, py5.BOTTOM)
-    py5.fill(py5.color(colors["text"]), int(0.2 * 255))
-    py5.text("OUTCOMES ARE MORE SENSITIVE THAN THEY APPEAR", VIEW_W - 10, VIEW_H - 1)
 
 
 # ---------------------------------------------------------------------------
@@ -540,14 +729,23 @@ def draw() -> None:
 
 
 def key_pressed() -> None:
-    global colors, theme_name
+    global colors, theme_name, regions, region_colors, paint_index, current_state
     if py5.key == "r":
         reset_composition()
     elif py5.key == " ":
-        theme_name = random.choice(list_pendulum_themes())
-        colors = PENDULUM_THEMES[theme_name]
-        reset_composition()
-        print(f"Theme: {theme_name}")
+        # Re-color the existing regions with a new theme.
+        # Only meaningful once the topology has been solved (i.e., we have
+        # a `regions` list to recolor). Before that, fall back to reset.
+        if current_state == "DONE" and regions:
+            theme_name = random.choice(list_pendulum_themes())
+            colors = PENDULUM_THEMES[theme_name]
+            recolor_regions()
+            print(f"Theme: {theme_name} (recolored existing regions)")
+        else:
+            theme_name = random.choice(list_pendulum_themes())
+            colors = PENDULUM_THEMES[theme_name]
+            reset_composition()
+            print(f"Theme: {theme_name} (full reset)")
     elif py5.key == "s":
         save_current()
 
